@@ -96,7 +96,10 @@ export class Family extends DurableObject {
           tab: String(body.tab || ''),
           tag: String(body.tag || ''),
         });
-        const subs = this.sql.exec('SELECT endpoint, sub FROM subs WHERE member != ?', String(body.from || '')).toArray();
+        const to = String(body.to || '');
+        const subs = (to && to !== 'all'
+          ? this.sql.exec('SELECT endpoint, sub FROM subs WHERE member = ?', to)
+          : this.sql.exec('SELECT endpoint, sub FROM subs WHERE member != ?', String(body.from || ''))).toArray();
         const keys = await this.vapid();
         let sent = 0;
         await Promise.all(subs.map(async r => {

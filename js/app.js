@@ -1,9 +1,9 @@
 import { meta, allItems, putItems, uid, clearAll } from './db.js';
 import { parseEvent, parseShopping, norm } from './parse.js';
-import { ymd, fromYmd, addDays, todayStr, niceDate, occursOn, DIAS_LARGO, DIAS_CORTO, MESES, REPEAT_LABEL } from './dates.js';
+import { ymd, fromYmd, addDays, todayStr, niceDate, occursOn, DIAS_LARGO, DIAS_CORTO, MESES, REPEAT_LABEL, LETRAS, setHolidays, holidayOn } from './dates.js';
 import { startSync, syncNow, syncStatus, onSyncStatus, queueNotice, pushSupport, enablePush, refreshPush, hasServer } from './sync.js';
 
-const VERSION = '0.3.0';
+const VERSION = '0.4.0';
 const COLORS = ['#0d9488', '#3b82f6', '#f97316', '#a855f7', '#e11d48', '#ca8a04'];
 const ALL_COLOR = '#64748b';
 const APP_URL = location.origin + location.pathname;
@@ -23,10 +23,19 @@ const member = id => members().find(m => m.id === id);
 const events = () => S.items.filter(i => i.kind === 'event' && !i.deleted);
 const shop = () => S.items.filter(i => i.kind === 'shop' && !i.deleted);
 const pantry = () => S.items.filter(i => i.kind === 'pantry' && !i.deleted);
+const holidays = () => S.items.filter(i => i.kind === 'holiday' && !i.deleted).sort((a, b) => a.from.localeCompare(b.from));
+const tasks = () => S.items.filter(i => i.kind === 'task' && !i.deleted);
+const forMe = t => t.to === S.me || (t.to === 'all' && t.from !== S.me);
+const myPending = () => tasks().filter(t => !t.done && forMe(t)).sort((a, b) => b.createdAt - a.createdAt);
 const PLACES = [['despensa', '🥫', 'Despensa'], ['nevera', '🧊', 'Nevera'], ['congelador', '❄️', 'Congelador'], ['hogar', '🧴', 'Limpieza y hogar']];
 const colorOf = who => (who && who !== 'all' && member(who)?.color) || ALL_COLOR;
 
-async function reload() { S.items = await allItems(); render(); }
+async function reload() {
+  const before = new Set(myPending().map(t => t.id));
+  S.items = await allItems(); render();
+  const nuevos = myPending().filter(t => !before.has(t.id));
+  if (nuevos.length) { toast(`📣 ${member(nuevos[0].from)?.name || ''}: ${nuevos[0].title}`); navigator.vibrate?.(300); }
+}
 
 async function save(list) {
   const now = Date.now();
@@ -51,7 +60,7 @@ async function init() {
   const h = location.hash;
   if (h.startsWith('#unir=')) S.joinPayload = decodePayload(h.slice(6));
   const qt = new URLSearchParams(location.search).get('tab');
-  if (['hoy', 'cal', 'compra', 'despensa'].includes(qt)) { S.tab = qt; history.replaceState(null, '', APP_URL + location.hash); }
+  if (['hoy', 'cal', 'tareas', 'compra', 'despensa'].includes(qt)) { S.tab = qt; history.replaceState(null, '', APP_URL + location.hash); }
   S.family = await meta.get('family');
   S.me = await meta.get('me');
   S.items = await allItems();
@@ -70,7 +79,8 @@ function render() {
   const active = document.activeElement;
   const keep = active && active.id && app.contains(active) ? { id: active.id, v: active.value, s: active.selectionStart } : null;
 
-  const title = { hoy: 'Hoy', cal: 'Calendario', compra: 'Compra', despensa: 'Despensa' }[S.tab];
+  setHolidays(holidays());
+  const title = { hoy: 'Hoy', cal: 'Calendario', tareas: 'Encargos', compra: 'Compra', despensa: 'Despensa' }[S.tab];
   const meM = member(S.me);
   app.innerHTML = `
   <header class="top">
@@ -80,10 +90,10 @@ function render() {
       <span class="avatar" style="background:${meM?.color || ALL_COLOR}">${esc((meM?.name || '?')[0].toUpperCase())}</span>
     </button>
   </header>
-  <main id="main">${S.tab === 'hoy' ? viewHoy() : S.tab === 'cal' ? viewCal() : S.tab === 'despensa' ? viewDespensa() : viewCompra()}</main>
+  <main id="main">${S.tab === 'hoy' ? viewHoy() : S.tab === 'cal' ? viewCal() : S.tab === 'despensa' ? viewDespensa() : S.tab === 'tareas' ? viewTareas() : viewCompra()}</main>
   <button class="fab" data-act="plus" aria-label="Añadir">+</button>
   <nav class="tabs">
-    ${tabBtn('hoy', '🏠', 'Hoy')}${tabBtn('cal', '📅', 'Calendario')}${tabBtn('compra', '🛒', 'Compra', shop().filter(s => !s.done).length)}${tabBtn('despensa', '🥫', 'Despensa', pantry().filter(x => x.qty <= 0).length)}
+    ${tabBtn('hoy', '🏠', 'Hoy')}${tabBtn('cal', '📅', 'Calendario')}${tabBtn('tareas', '📣', 'Encargos', myPending().length)}${tabBtn('compra', '🛒', 'Compra', shop().filter(s => !s.done).length)}${tabBtn('despensa', '🥫', 'Despensa', pantry().filter(x => x.qty <= 0).length)}
   </nav>`;
   renderSyncDot();
   if (keep) {
@@ -104,12 +114,21 @@ function renderSyncDot() {
   el.title = { off: 'Solo en este móvil', ok: 'Sincronizado', offline: 'Sin conexión', connecting: 'Conectando…' }[st];
 }
 
+function repeatText(e) {
+  if (e.repeat === 'weekly' && e.days?.length) {
+    const d = [...e.days].sort((a, b) => ((a + 6) % 7) - ((b + 6) % 7));
+    if (d.join() === '1,2,3,4,5') return 'de lunes a viernes';
+    return d.map(x => LETRAS[x]).join(', ');
+  }
+  return REPEAT_LABEL[e.repeat].toLowerCase();
+}
+
 function eventRow(e, day) {
   const who = e.who && e.who !== 'all' ? member(e.who)?.name : 'Todos';
   return `<button class="ev" data-act="editEvent" data-id="${e.id}" data-day="${day}" style="--c:${colorOf(e.who)}">
     <span class="evtime">${e.time ? esc(e.time) : '<small>Todo<br>el día</small>'}</span>
     <span class="evbody"><span class="evtitle">${esc(e.title)}</span>
-      <span class="evmeta">${esc(who || '')}${e.repeat && e.repeat !== 'none' ? ' · 🔁 ' + REPEAT_LABEL[e.repeat].toLowerCase() : ''}</span></span>
+      <span class="evmeta">${esc(who || '')}${e.repeat && e.repeat !== 'none' ? ' · 🔁 ' + repeatText(e) : ''}</span></span>
   </button>`;
 }
 
@@ -130,6 +149,7 @@ function viewHoy() {
   return `
   <p class="hello">${hola}, ${esc(member(S.me)?.name || '')} 👋<br><span>${DIAS_LARGO[d.getDay()]} ${d.getDate()} de ${MESES[d.getMonth()]}</span></p>
   ${pushCard()}
+  ${myPending().length ? `<section class="card taskcard"><h2>📣 Te han pedido</h2>${myPending().map(taskRow).join('')}</section>` : ''}
   <section class="card">
     <h2>Hoy</h2>
     ${hoy.length ? hoy.map(e => eventRow(e, t)).join('') : `<p class="empty">Nada para hoy 🎉</p>`}
@@ -167,7 +187,7 @@ function viewCal() {
     const s = ymd(d);
     const evs = eventsOn(s);
     const dots = evs.slice(0, 4).map(e => `<i style="background:${colorOf(e.who)}"></i>`).join('');
-    cells += `<button class="cd ${d.getMonth() !== m.getMonth() ? 'out' : ''} ${s === t ? 'today' : ''} ${s === S.calDay ? 'sel' : ''}" data-act="pickDay" data-day="${s}">
+    cells += `<button class="cd ${holidayOn(s) ? 'hol' : ''} ${d.getMonth() !== m.getMonth() ? 'out' : ''} ${s === t ? 'today' : ''} ${s === S.calDay ? 'sel' : ''}" data-act="pickDay" data-day="${s}">
       <span>${d.getDate()}</span><span class="dots">${dots}</span></button>`;
   }
   const evs = eventsOn(S.calDay);
@@ -181,10 +201,90 @@ function viewCal() {
   <div class="cal">${['L', 'M', 'X', 'J', 'V', 'S', 'D'].map(x => `<b>${x}</b>`).join('')}${cells}</div>
   <section class="card">
     <h2>${niceDate(S.calDay)}</h2>
+    ${holidayOn(S.calDay) ? `<p class="holtag">🏖️ ${esc(holidayOn(S.calDay).name || 'Vacaciones')}</p>` : ''}
     ${evs.length ? evs.map(e => eventRow(e, S.calDay)).join('') : `<p class="empty">Nada este día</p>`}
     <button class="btn ghost" data-act="addEvent" data-day="${S.calDay}">＋ Añadir a este día</button>
   </section>
+  <button class="btn ghost" data-act="holidays">🏖️ Vacaciones y días no lectivos</button>
   <div class="spacer"></div>`;
+}
+
+function taskRow(t) {
+  const from = member(t.from)?.name || '';
+  const to = t.to === 'all' ? 'todos' : member(t.to)?.name || '';
+  const when = new Date(t.createdAt);
+  const hora = `${String(when.getHours()).padStart(2, '0')}:${String(when.getMinutes()).padStart(2, '0')}`;
+  const dia = ymd(when) === todayStr() ? hora : `${niceDate(ymd(when)).toLowerCase()}, ${hora}`;
+  if (t.done) {
+    const dw = new Date(t.doneAt);
+    return `<div class="task done-t"><span class="tchk">✓</span><span class="tbody"><b>${esc(t.title)}</b><small>Hecho por ${esc(member(t.doneBy)?.name || '')} a las ${String(dw.getHours()).padStart(2, '0')}:${String(dw.getMinutes()).padStart(2, '0')}</small></span>
+      <button class="x" data-act="delTask" data-id="${t.id}" aria-label="Quitar">✕</button></div>`;
+  }
+  if (forMe(t)) return `<div class="task" style="--c:${colorOf(t.from)}"><span class="tbody"><b>${esc(t.title)}</b><small>${esc(from)} · ${dia}</small></span>
+    <button class="btn done-btn" data-act="doneTask" data-id="${t.id}">✓ Hecho</button></div>`;
+  return `<div class="task wait" style="--c:${colorOf(t.to)}"><span class="tbody"><b>${esc(t.title)}</b><small>Esperando a ${esc(to)} · ${dia}</small></span>
+    <button class="x" data-act="delTask" data-id="${t.id}" aria-label="Cancelar">✕</button></div>`;
+}
+
+function viewTareas() {
+  const mine = myPending();
+  const asked = tasks().filter(t => !t.done && !forMe(t)).sort((a, b) => b.createdAt - a.createdAt);
+  const done = tasks().filter(t => t.done).sort((a, b) => b.doneAt - a.doneAt).slice(0, 15);
+  return `
+  <button class="btn big" data-act="newTask">📣 Nuevo encargo</button>
+  <p class="hint center">Le llega un aviso al momento y tiene que marcarlo como hecho.</p>
+  <section class="card"><h2>Para ti</h2>${mine.length ? mine.map(taskRow).join('') : '<p class="empty">Nada pendiente 🙌</p>'}</section>
+  ${asked.length ? `<section class="card"><h2>Has pedido</h2>${asked.map(taskRow).join('')}</section>` : ''}
+  ${done.length ? `<section class="card done"><div class="rowh"><h2>Hechos</h2><button class="link" data-act="clearTasks">Vaciar</button></div>${done.map(taskRow).join('')}</section>` : ''}
+  <div class="spacer"></div>`;
+}
+
+function taskSheet() {
+  const others = members().filter(m => m.id !== S.me);
+  const def = others.length === 1 ? others[0].id : 'all';
+  const opts = [...others, { id: 'all', name: 'Todos', color: ALL_COLOR }];
+  openSheet(`
+    <form data-act="sendTask">
+      <h2>📣 Nuevo encargo</h2>
+      <p class="hint">Ej: <i>“Recoger a Lola del cole a las 4:15”</i>, <i>“Bajar al portal en 5 minutos”</i></p>
+      <input id="taskText" name="text" type="text" placeholder="¿Qué hay que hacer?" autocomplete="off" enterkeyhint="send" required>
+      <label>¿Para quién?</label>
+      <div class="chips who">${opts.map(o => `<button type="button" class="chip ${def === o.id ? 'on' : ''}" data-act="who" data-id="${o.id}" style="--c:${o.color}">${esc(o.name)}</button>`).join('')}</div>
+      <input type="hidden" name="who" value="${def}">
+      ${others.length ? '' : '<p class="note">Aún no hay nadie más en la familia. Invita desde Ajustes.</p>'}
+      <button class="btn big" type="submit">📣 Enviar aviso ya</button>
+    </form>`, el => setTimeout(() => el.querySelector('input').focus(), 250));
+}
+
+function holidaysSheet() {
+  const list = holidays();
+  openSheet(`
+    <h2>🏖️ Vacaciones y no lectivos</h2>
+    <p class="hint">Los eventos repetitivos marcados con “No se hace en vacaciones” se saltan estos días.</p>
+    <section class="card">${list.length ? list.map(h => `<div class="shop"><span class="sname">${esc(h.name || 'Vacaciones')}<br><small class="muted">${niceDate(h.from)}${h.to && h.to !== h.from ? ' → ' + niceDate(h.to).toLowerCase() : ''}</small></span><button class="x" data-act="delHoliday" data-id="${h.id}" aria-label="Quitar">✕</button></div>`).join('') : '<p class="empty">Ninguno todavía</p>'}</section>
+    <form data-act="addHoliday">
+      <label>Nombre</label>
+      <input name="name" placeholder="Ej: Navidad, Puente, No lectivo" autocomplete="off" required>
+      <div class="grid2">
+        <div><label>Desde</label><input type="date" name="from" value="${todayStr()}" required></div>
+        <div><label>Hasta</label><input type="date" name="to" value="${todayStr()}"></div>
+      </div>
+      <button class="btn big" type="submit">Añadir</button>
+    </form>`, el => { const f = el.querySelector('form'); f.from.addEventListener('change', () => { if (f.to.value < f.from.value) f.to.value = f.from.value; }); });
+}
+
+async function favSheet() {
+  // La primera vez convertimos los habituales automáticos en una lista propia, editable y compartida
+  if (!favItems().length) await save(favorites().slice(0, 14).map(n => ({ id: uid(), kind: 'fav', name: n })));
+  openSheet(`
+    <h2>⭐ Habituales</h2>
+    <p class="hint">Aparecen en la Compra para añadirlos con un toque. Se comparten con la familia.</p>
+    <form data-act="addFav" class="row">
+      <input name="name" id="favInput" placeholder="Ej: Galletas, Detergente" autocomplete="off" required>
+      <button class="btn" type="submit">Añadir</button>
+    </form>
+    <div class="chips">${favItems().map(f => `<button class="chip" data-act="delFav" data-id="${f.id}">${esc(f.name)} <span class="muted">✕</span></button>`).join('')}</div>
+    <button class="btn big" data-act="close">Hecho</button>`);
 }
 
 function viewCompra() {
@@ -192,12 +292,13 @@ function viewCompra() {
   const pend = all.filter(s => !s.done).sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0));
   const done = all.filter(s => s.done).sort((a, b) => (b.doneAt || 0) - (a.doneAt || 0));
   const onList = new Set(pend.map(p => norm(p.name)));
-  const favs = favorites().filter(f => !onList.has(norm(f))).slice(0, 14);
+  const favs = favorites().filter(f => !onList.has(norm(f))).slice(0, 40);
   return `
   <form class="addshop" data-act="addShop">
     <input id="shopInput" type="text" placeholder="Añadir: leche, pan, huevos…" autocomplete="off" enterkeyhint="done">
     <button class="btn" type="submit">Añadir</button>
   </form>
+  <div class="rowh favh"><small class="muted">⭐ Habituales</small><button class="link" data-act="editFavs">Editar</button></div>
   ${favs.length ? `<div class="chips">${favs.map(f => `<button class="chip" data-act="fav" data-name="${esc(f)}">＋ ${esc(f)}</button>`).join('')}</div>` : ''}
   <section class="card">
     ${pend.length ? pend.map(p => shopRow(p)).join('') : `<p class="empty">Nada que comprar 🎉<br><small>Escribe arriba o pulsa en los habituales</small></p>`}
@@ -278,14 +379,17 @@ function shopRow(p) {
   return `<div class="shop ${p.done ? 'is-done' : ''}">
     <button class="check" data-act="toggleShop" data-id="${p.id}" aria-label="Marcar">${p.done ? '✓' : ''}</button>
     <button class="sname" data-act="toggleShop" data-id="${p.id}">${esc(p.name)}</button>
-    <span class="who" style="background:${colorOf(p.by)}" title="${esc(member(p.by)?.name || '')}"></span>
+    <span class="whodot" style="background:${colorOf(p.by)}" title="${esc(member(p.by)?.name || '')}"></span>
     <button class="x" data-act="delShop" data-id="${p.id}" aria-label="Quitar">✕</button>
   </div>`;
 }
 
 // Habituales: lo que más se compra (se aprende solo)
 let freqCache = null;
+const favItems = () => S.items.filter(i => i.kind === 'fav' && !i.deleted).sort((a, b) => a.name.localeCompare(b.name, 'es'));
+// Habituales: los que elegís vosotros (compartidos). Si aún no hay ninguno, se aprenden solos.
 function favorites() {
+  if (favItems().length) return favItems().map(f => f.name);
   const f = freqCache || {};
   const names = Object.entries(f).sort((a, b) => b[1].n - a[1].n).map(([, v]) => v.name);
   const defaults = ['Leche', 'Pan', 'Huevos', 'Fruta', 'Agua', 'Café', 'Papel higiénico', 'Yogures'];
@@ -329,6 +433,7 @@ function plusSheet() {
   openSheet(`
     <h2 class="center">¿Qué quieres añadir?</h2>
     <div class="bigchoices">
+      <button data-act="newTask" class="wide"><span>📣</span>Encargo con aviso</button>
       <button data-act="addEvent"><span>📅</span>Evento</button>
       <button data-act="addRepeat"><span>🔁</span>Repetitivo</button>
       <button data-act="addShopSheet"><span>🛒</span>Compra</button>
@@ -359,6 +464,15 @@ function eventSheet({ ev = null, day = null, repeat = false } = {}) {
       </div>
       <label>Repetir</label>
       <select name="repeat">${Object.entries(REPEAT_LABEL).map(([k, v]) => `<option value="${k}" ${e.repeat === k ? 'selected' : ''}>${v}</option>`).join('')}</select>
+      <div class="rep-opts">
+        <div class="weekonly"><label>Qué días</label>
+          <div class="daypick">${[1, 2, 3, 4, 5, 6, 0].map(d => `<button type="button" class="dp" data-act="dayToggle" data-d="${d}">${LETRAS[d]}</button>`).join('')}</div>
+        </div>
+        <input type="hidden" name="days" value="${esc((e.days || []).join(','))}">
+        <label class="check-row"><input type="checkbox" name="noHolidays" ${e.noHolidays ? 'checked' : ''}> 🏖️ No se hace en vacaciones ni días no lectivos</label>
+        <label>Hasta (opcional)</label>
+        <input type="date" name="until" value="${esc(e.until || '')}">
+      </div>
       <button class="btn big" type="submit">Guardar</button>
       ${!isNew ? (e.repeat && e.repeat !== 'none'
         ? `<div class="grid2"><button type="button" class="btn danger ghost" data-act="delOcc" data-day="${occ}">Borrar solo ${niceDate(occ).toLowerCase()}</button><button type="button" class="btn danger ghost" data-act="delEvent">Borrar todos</button></div>`
@@ -368,6 +482,9 @@ function eventSheet({ ev = null, day = null, repeat = false } = {}) {
     f.dataset.id = ev ? ev.id : '';
     const touched = new Set();
     ['date', 'time', 'repeat'].forEach(n => f[n].addEventListener('input', () => touched.add(n)));
+    f.repeat.addEventListener('change', () => syncRepeatUI(f));
+    f.date.addEventListener('change', () => { if (!f.days.value) syncRepeatUI(f); });
+    syncRepeatUI(f);
     const txt = f.text;
     txt.addEventListener('input', () => {
       if (!isNew) return;
@@ -375,12 +492,23 @@ function eventSheet({ ev = null, day = null, repeat = false } = {}) {
       if (!touched.has('date')) f.date.value = p.date || e.date;
       if (!touched.has('time')) f.time.value = p.time || '';
       if (!touched.has('repeat')) f.repeat.value = p.repeat !== 'none' ? p.repeat : (repeat ? 'weekly' : 'none');
+      if (!f.dataset.touchedDays) f.days.value = p.days ? p.days.join(',') : '';
+      syncRepeatUI(f);
       // detectar persona por nombre
       const tn = norm(txt.value);
       for (const m of members()) if (new RegExp('\\b' + norm(m.name) + '\\b').test(tn)) setWho(f, m.id);
     });
     if (isNew) setTimeout(() => txt.focus(), 250);
   });
+}
+
+function syncRepeatUI(f) {
+  const rep = f.repeat.value;
+  f.querySelector('.rep-opts').hidden = rep === 'none';
+  f.querySelector('.weekonly').hidden = rep !== 'weekly';
+  let days = f.days.value ? f.days.value.split(',').map(Number) : [];
+  if (rep === 'weekly' && !days.length && f.date.value) days = [fromYmd(f.date.value).getDay()];
+  f.querySelectorAll('.dp').forEach(b => b.classList.toggle('on', rep === 'weekly' && days.includes(+b.dataset.d)));
 }
 
 function setWho(form, id) {
@@ -601,6 +729,29 @@ async function onClick(e) {
     case 'who': setWho(b.closest('form'), b.dataset.id); break;
     case 'delEvent': { const id = b.closest('form').dataset.id; const ev = S.items.find(i => i.id === id); closeSheet(); await save({ ...ev, deleted: true }); toast('Borrado'); break; }
     case 'delOcc': { const id = b.closest('form').dataset.id; const ev = S.items.find(i => i.id === id); closeSheet(); await save({ ...ev, skip: [...(ev.skip || []), b.dataset.day] }); toast('Borrado ese día'); break; }
+    case 'dayToggle': {
+      const f = b.closest('form');
+      let days = f.days.value ? f.days.value.split(',').map(Number) : [];
+      if (!days.length && f.date.value) days = [fromYmd(f.date.value).getDay()];
+      const d = +b.dataset.d;
+      days = days.includes(d) ? days.filter(x => x !== d) : [...days, d];
+      f.days.value = days.join(',');
+      f.dataset.touchedDays = '1';
+      syncRepeatUI(f); break;
+    }
+    case 'holidays': holidaysSheet(); break;
+    case 'delHoliday': { const it = S.items.find(i => i.id === b.dataset.id); await save({ ...it, deleted: true }); holidaysSheet(); break; }
+    case 'newTask': taskSheet(); break;
+    case 'editFavs': favSheet(); break;
+    case 'delFav': { const it = S.items.find(i => i.id === b.dataset.id); await save({ ...it, deleted: true }); favSheet(); break; }
+    case 'doneTask': {
+      const t = S.items.find(i => i.id === b.dataset.id);
+      await save({ ...t, done: true, doneBy: S.me, doneAt: Date.now() });
+      queueNotice({ urgent: true, from: S.me, to: t.from, title: '✅ Hecho', body: `${member(S.me)?.name || ''}: ${t.title}`, tab: 'tareas' });
+      toast('✅ Avisado de que está hecho'); break;
+    }
+    case 'delTask': { const t = S.items.find(i => i.id === b.dataset.id); await save({ ...t, deleted: true }); break; }
+    case 'clearTasks': await save(tasks().filter(t => t.done).map(t => ({ ...t, deleted: true }))); break;
     case 'pickDay': S.calDay = b.dataset.day; render(); break;
     case 'month': S.calMonth = new Date(S.calMonth.getFullYear(), S.calMonth.getMonth() + +b.dataset.d, 1); render(); break;
     case 'goToday': { const d = new Date(); S.calMonth = new Date(d.getFullYear(), d.getMonth(), 1); S.calDay = todayStr(); render(); break; }
@@ -681,12 +832,43 @@ async function onSubmit(e) {
       let title = fd.get('text').trim();
       if (!id) title = parseEvent(title).title || title;
       const base = id ? S.items.find(i => i.id === id) : { id: uid(), kind: 'event', createdAt: Date.now() };
-      const ev = { ...base, title, date: fd.get('date'), time: fd.get('time') || '', who: fd.get('who') || 'all', repeat: fd.get('repeat') || 'none' };
+      const repeat = fd.get('repeat') || 'none';
+      let days = fd.get('days') ? fd.get('days').split(',').map(Number) : [];
+      let date = fd.get('date');
+      if (repeat === 'weekly' && days.length) {
+        // la primera vez: el primer día marcado a partir de la fecha elegida
+        const d0 = fromYmd(date); const diff = Math.min(...days.map(d => (d - d0.getDay() + 7) % 7));
+        date = ymd(addDays(d0, diff));
+      } else days = [];
+      const ev = { ...base, title, date, time: fd.get('time') || '', who: fd.get('who') || 'all', repeat, days,
+        noHolidays: repeat !== 'none' && !!fd.get('noHolidays'), until: repeat !== 'none' ? (fd.get('until') || '') : '' };
       closeSheet();
       await save(ev);
-      if (!id) queueNotice({ from: S.me, title: '📅 Nuevo evento', body: `${member(S.me)?.name || ''}: ${ev.title} · ${niceDate(ev.date)}${ev.time ? ', ' + ev.time : ''}${ev.repeat !== 'none' ? ' (' + REPEAT_LABEL[ev.repeat].toLowerCase() + ')' : ''}`, tab: 'cal' });
+      if (!id) queueNotice({ from: S.me, title: '📅 Nuevo evento', body: `${member(S.me)?.name || ''}: ${ev.title} · ${niceDate(ev.date)}${ev.time ? ', ' + ev.time : ''}${ev.repeat !== 'none' ? ' (' + repeatText(ev) + ')' : ''}`, tab: 'cal' });
       toast(`Guardado: ${niceDate(ev.date)}${ev.time ? ' ' + ev.time : ''}`);
       break;
+    }
+    case 'addFav': {
+      const names = parseShopping(fd.get('name'));
+      const have = new Set(favItems().map(f => norm(f.name)));
+      await save(names.filter(n => !have.has(norm(n))).map(n => ({ id: uid(), kind: 'fav', name: n })));
+      await favSheet(); setTimeout(() => document.getElementById('favInput')?.focus(), 50); break;
+    }
+    case 'sendTask': {
+      const title = fd.get('text').trim(); if (!title) break;
+      const to = fd.get('who') || 'all';
+      const t = { id: uid(), kind: 'task', title, from: S.me, to, done: false, createdAt: Date.now() };
+      closeSheet();
+      S.tab = 'tareas';
+      await save(t);
+      queueNotice({ urgent: true, from: S.me, to, title: `📣 ${member(S.me)?.name || ''} te pide`, body: title, tab: 'tareas' });
+      toast(navigator.onLine ? '📣 Aviso enviado' : '📣 Se enviará al volver internet');
+      break;
+    }
+    case 'addHoliday': {
+      const from = fd.get('from'); const to = fd.get('to') && fd.get('to') >= from ? fd.get('to') : from;
+      await save({ id: uid(), kind: 'holiday', name: fd.get('name').trim(), from, to, createdAt: Date.now() });
+      holidaysSheet(); toast('Añadido'); break;
     }
     case 'addPantry': {
       const inp = f.querySelector('input'); const entries = parsePantry(inp.value); inp.value = '';

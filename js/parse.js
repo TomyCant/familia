@@ -38,6 +38,37 @@ export function parseEvent(text, baseDate = new Date()) {
   }
   if (repeat === 'none' && /\bcumplea(n|ñ)os\b/.test(t)) repeat = 'yearly';
 
+  // --- Varios días de la semana: "lunes y miércoles", "L y X", "de lunes a viernes", "entre semana"
+  let days = null;
+  if ((m = find(/\b(?:todos\s+los\s+dias\s+)?(?:de\s+)?lunes\s+a\s+viernes\b|\bentre\s+semana\b/g))) { days = [1, 2, 3, 4, 5]; take(m); }
+  else if ((m = find(/\b(?:los\s+)?fines?\s+de\s+semana\b|\bfindes?\b/g))) { days = [6, 0]; take(m); }
+  else {
+    const found = [];
+    const reDay = /\b(?:(?:todos|cada)\s+)?(?:los\s+|el\s+)?(lunes|martes|miercoles|jueves|viernes|sabados?|domingos?)\b/g;
+    let mm; reDay.lastIndex = 0;
+    while ((mm = reDay.exec(t))) found.push(mm);
+    // Letras sueltas en mayúscula: L M X J V S D
+    const reLet = /(?:^|[\s,(])([LMXJVSD])(?=$|[\s,).y])/g;
+    const LET = { L: 1, M: 2, X: 3, J: 4, V: 5, S: 6, D: 0 };
+    const lets = [];
+    while ((mm = reLet.exec(original))) lets.push(mm);
+    if (found.length >= 2 || lets.length >= 2 || (found.length === 1 && repeat === 'weekly')) {
+      days = [];
+      for (const f of found) { days.push(DIAS.indexOf(f[1].replace(/s$/, '')) >= 0 ? DIAS.indexOf(f[1].replace(/s$/, '')) : DIAS.indexOf(f[1])); take(f); }
+      if (lets.length >= 2) for (const l of lets) { days.push(LET[l[1]]); const i = l.index + l[0].indexOf(l[1]); used[i] = true; }
+      // quitar las "y" / comas que unían los días
+      const re2 = /\s(y|e)\s/g; let y;
+      while ((y = re2.exec(t))) { const a = used[y.index - 1], b = used[y.index + y[0].length]; if (a && b) for (let i = y.index; i < y.index + y[0].length; i++) used[i] = true; }
+      days = [...new Set(days)].filter(d => d >= 0);
+    }
+  }
+  if (days && days.length) {
+    repeat = 'weekly';
+    const td = today.getDay();
+    const diff = Math.min(...days.map(d => (d - td + 7) % 7));
+    date = addDays(today, diff);
+  }
+
   // --- Fecha
   if (!date) {
     if ((m = find(/\bpasado\s+manana\b/g))) { date = addDays(today, 2); take(m); }
@@ -102,9 +133,10 @@ export function parseEvent(text, baseDate = new Date()) {
     .replace(/\s+(el|la|a|a las|de|del|y)\s*$/i, '')
     .replace(/\s+(el|la|a|a las|de|del|y)\s*$/i, '')
     .trim();
+  title = title.replace(/\s+([,.;])/g, '$1').replace(/([,;])\s*(?=[,;])/g, '').replace(/^[,;.\s]+|[,;.\s]+$/g, '');
   if (title) title = title[0].toUpperCase() + title.slice(1);
 
-  return { title, date: date ? ymd(date) : null, time, repeat };
+  return { title, date: date ? ymd(date) : null, time, repeat, days: days && days.length ? days.sort((a, b) => ((a + 6) % 7) - ((b + 6) % 7)) : null };
 }
 
 export function parseShopping(text) {

@@ -82,7 +82,7 @@ export async function queueNotice(n) {
   }
   box.push({ ...n, id: Math.random().toString(36).slice(2), at: Date.now() });
   await meta.set('outbox', box);
-  flushSoon();
+  if (n.urgent) syncNow(); else flushSoon(1500);
 }
 
 function flushSoon(ms = 12000) {
@@ -99,7 +99,7 @@ async function flushOutbox() {
     if (n.group && Date.now() - n.at < 10000 && !document.hidden) { keep.push(n); continue; }
     const body = n.group ? `${n.who} ha añadido: ${n.items.join(', ')}` : n.body;
     try {
-      const r = await fetch(`${apiBase()}/notify`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ from: n.from, title: n.title, body, tab: n.tab, tag: n.group || '' }) });
+      const r = await fetch(`${apiBase()}/notify`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ from: n.from, to: n.to || '', title: n.title, body, tab: n.tab, tag: n.group || '' }) });
       if (r.ok) sent.add(n.id);
     } catch {}
   }
