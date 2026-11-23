@@ -1,9 +1,9 @@
 import { meta, allItems, putItems, uid, clearAll } from './db.js';
 import { parseEvent, parseShopping, norm } from './parse.js';
 import { ymd, fromYmd, addDays, todayStr, niceDate, occursOn, DIAS_LARGO, DIAS_CORTO, MESES, REPEAT_LABEL, LETRAS, setHolidays, holidayOn } from './dates.js';
-import { removeMemberFromServer, startSync, syncNow, syncStatus, onSyncStatus, queueNotice, pushSupport, enablePush, refreshPush, hasServer } from './sync.js';
+import { removeMemberFromServer, apiBase, startSync, syncNow, syncStatus, onSyncStatus, queueNotice, pushSupport, enablePush, refreshPush, hasServer } from './sync.js';
 
-const VERSION = '0.4.1';
+const VERSION = '0.5.0';
 const COLORS = ['#0d9488', '#3b82f6', '#f97316', '#a855f7', '#e11d48', '#ca8a04'];
 const ALL_COLOR = '#64748b';
 const APP_URL = location.origin + location.pathname;
@@ -254,6 +254,29 @@ function taskSheet() {
       ${others.length ? '' : '<p class="note">Aún no hay nadie más en la familia. Invita desde Ajustes.</p>'}
       <button class="btn big" type="submit">📣 Enviar aviso ya</button>
     </form>`, el => setTimeout(() => el.querySelector('input').focus(), 250));
+}
+
+function quickSheet() {
+  if (!hasServer()) { toast('Hace falta el servidor activo'); return; }
+  const others = members().filter(m => m.id !== S.me);
+  const to = others.length === 1 ? others[0].id : 'all';
+  const toName = to === 'all' ? 'toda la familia' : others[0].name;
+  const url = `${apiBase()}/quick?de=${S.me}&para=${to}`;
+  openSheet(`
+    <h2>⚡ Encargo rápido</h2>
+    <p class="hint">Crea un <b>Atajo</b> en este iPhone para mandar un encargo a <b>${esc(toName)}</b> sin abrir la app: con un icono, diciendo <i>“Oye Siri, encargo”</i> o con el botón de Acción. Se hace una vez y tarda 2 minutos.</p>
+    <ol class="steps">
+      <li>Abre la app <b>Atajos</b> → pestaña <b>Atajos</b> → botón <b>+</b> (arriba a la derecha).</li>
+      <li>Toca <b>Buscar acciones</b>, escribe <b>Solicitar entrada</b> y tócala. Donde pone “Pregunta”, escribe: <i>¿Qué encargo?</i></li>
+      <li>Busca otra acción: <b>Obtener contenido de URL</b>. Toca donde pone “URL” y pega esta dirección:
+        <div class="copybox"><code>${esc(url)}</code><button class="btn" data-act="copyText" data-text="${esc(url)}">Copiar dirección</button></div></li>
+      <li>En esa misma acción toca la flechita <b>›</b> (o “Mostrar más”): <b>Método</b> → <b>POST</b>. <b>Cuerpo de la solicitud</b> → <b>JSON</b>. Toca <b>Añadir campo nuevo</b> → <b>Texto</b>: en la clave escribe <b>texto</b> y en el valor toca <b>Entrada proporcionada</b> (aparece sobre el teclado).</li>
+      <li>Busca la acción <b>Mostrar resultado</b> y añádela (así ves “✅ Encargo enviado”).</li>
+      <li>Arriba, toca el nombre del atajo y llámalo <b>Encargo</b>. Pulsa <b>OK</b>.</li>
+    </ol>
+    <p class="hint"><b>Para tenerlo a mano:</b> mantén pulsado el atajo → Compartir → <b>Añadir a pantalla de inicio</b>. En un iPhone 15 Pro también puedes ponerlo en el <b>botón de Acción</b> (Ajustes → Botón de Acción → Atajo → Encargo). O simplemente di <i>“Oye Siri, encargo”</i> y díctalo.</p>
+    <p class="note">Cada móvil debe crear su propio atajo desde su propia app (la dirección es distinta para cada uno).</p>
+    <button class="btn big" data-act="settings">Hecho</button>`);
 }
 
 function holidaysSheet() {
@@ -557,6 +580,8 @@ function settingsSheet() {
       granted: '<p class="note">🔔 Avisos activados en este móvil.</p><button class="btn ghost" data-act="testPush">Probar aviso</button>',
       default: '<button class="btn" data-act="enablePush">🔔 Activar avisos</button>',
     }[p]; })()}
+    <label>Encargo rápido</label>
+    <button class="btn ghost" data-act="quickSetup">⚡ Enviar encargos sin abrir la app</button>
     <label>Copia de seguridad</label>
     <div class="grid2">
       <button class="btn ghost" data-act="backup">⬇️ Guardar copia</button>
@@ -789,6 +814,8 @@ async function onClick(e) {
       removeMemberFromServer(m.id);
       toast(`${m.name} quitado`); settingsSheet(); break;
     }
+    case 'quickSetup': quickSheet(); break;
+    case 'copyText': try { await navigator.clipboard.writeText(b.dataset.text); toast('Copiado ✓'); } catch { toast('No se pudo copiar'); } break;
     case 'askLeave':
       openSheet(`<h2>¿Salir de la familia?</h2>
         <p class="hint">Se borran los datos de <b>este móvil</b> y vuelves a la pantalla de inicio para crear o unirte a una familia. Los demás móviles no pierden nada.</p>

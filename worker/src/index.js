@@ -53,7 +53,8 @@ export class Family extends DurableObject {
   async fetch(req) {
     const url = new URL(req.url);
     const action = url.pathname.slice(1);
-    const body = req.method === 'POST' ? await req.json().catch(() => ({})) : null;
+    const rawBody = req.method === 'POST' ? await req.text() : '';
+    let body = {}; try { body = JSON.parse(rawBody) || {}; } catch {}
 
     switch (action) {
       case 'items': {
@@ -76,6 +77,40 @@ export class Family extends DurableObject {
           changed++;
         }
         return json({ ok: true, changed });
+      }
+      case 'quick': {
+        // Encargo rápido desde un Atajo de iPhone: POST /f/<familia>/quick?de=<miembro>&para=<miembro|all>
+        // Cuerpo: JSON {"texto": "..."} o texto plano.
+        const de = url.searchParams.get('de') || '';
+        const para = url.searchParams.get('para') || 'all';
+        let texto = '';
+        if (req.method === 'POST') {
+          try { const j = JSON.parse(rawBody); texto = typeof j === 'string' ? j : (j.texto || j.text || j.Texto || ''); } catch { texto = /^texto=/.test(rawBody) ? new URLSearchParams(rawBody).get('texto') : rawBody; }
+          if (!texto) texto = url.searchParams.get('texto') || '';
+        } else texto = url.searchParams.get('texto') || '';
+        texto = String(texto).trim().slice(0, 300);
+        const memberName = id => { const r = this.sql.exec('SELECT data FROM items WHERE id = ?', id).toArray()[0]; try { return JSON.parse(r.data).name; } catch { return ''; } };
+        const fromName = memberName(de);
+        if (!texto || !fromName) return new Response(!texto ? 'Falta el texto del encargo' : 'Atajo mal configurado', { status: 400, headers: { 'Content-Type': 'text/plain; charset=utf-8', ...CORS } });
+        const now = Date.now();
+        const id = 't' + crypto.randomUUID().replace(/-/g, '').slice(0, 19);
+        const task = { id, kind: 'task', title: texto[0].toUpperCase() + texto.slice(1), from: de, to: para, done: false, createdAt: now, updatedAt: now, by: de };
+        this.sql.exec('INSERT OR REPLACE INTO items (id, data, upd, srv) VALUES (?, ?, ?, ?)', id, JSON.stringify(task), now, this.now());
+        const payload = JSON.stringify({ title: `📣 ${fromName} te pide`, body: task.title, tab: 'tareas', tag: '' });
+        const subs = (para !== 'all'
+          ? this.sql.exec('SELECT endpoint, sub FROM subs WHERE member = ?', para)
+          : this.sql.exec('SELECT endpoint, sub FROM subs WHERE member != ?', de)).toArray();
+        const keys = await this.vapid();
+        let sent = 0;
+        await Promise.all(subs.map(async r => {
+          try {
+            const res = await sendPush(JSON.parse(r.sub), payload, keys);
+            if (res.status === 404 || res.status === 410) this.sql.exec('DELETE FROM subs WHERE endpoint = ?', r.endpoint);
+            else if (res.ok) sent++;
+          } catch (e) { console.log('push error', e); }
+        }));
+        const toName = para === 'all' ? 'la familia' : (memberName(para) || 'la familia');
+        return new Response(sent ? `✅ Encargo enviado a ${toName}` : `✅ Encargo guardado. ${toName} lo verá al abrir la app (no tiene los avisos activados).`, { headers: { 'Content-Type': 'text/plain; charset=utf-8', ...CORS } });
       }
       case 'vapid':
         return json({ key: (await this.vapid()).publicKey });
