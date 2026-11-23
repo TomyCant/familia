@@ -137,3 +137,9 @@ export async function refreshPush(memberId) {
 
 const b64u = buf => buf ? btoa(String.fromCharCode(...new Uint8Array(buf))).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '') : '';
 const unb64u = s => Uint8Array.from(atob(s.replace(/-/g, '+').replace(/_/g, '/') + '==='.slice((s.length + 3) % 4)), c => c.charCodeAt(0));
+
+// Quitar a un miembro: sus móviles dejan de recibir avisos
+export function removeMemberFromServer(memberId) {
+  if (!API() || !familyId) return;
+  fetch(`${apiBase()}/unsubscribe`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ member: memberId }) }).catch(() => {});
+}

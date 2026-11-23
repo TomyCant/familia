@@ -87,6 +87,7 @@ export class Family extends DurableObject {
       }
       case 'unsubscribe': {
         if (body.endpoint) this.sql.exec('DELETE FROM subs WHERE endpoint = ?', body.endpoint);
+        if (body.member) this.sql.exec('DELETE FROM subs WHERE member = ?', String(body.member));
         return json({ ok: true });
       }
       case 'notify': {

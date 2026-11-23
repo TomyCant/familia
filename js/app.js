@@ -1,9 +1,9 @@
 import { meta, allItems, putItems, uid, clearAll } from './db.js';
 import { parseEvent, parseShopping, norm } from './parse.js';
 import { ymd, fromYmd, addDays, todayStr, niceDate, occursOn, DIAS_LARGO, DIAS_CORTO, MESES, REPEAT_LABEL, LETRAS, setHolidays, holidayOn } from './dates.js';
-import { startSync, syncNow, syncStatus, onSyncStatus, queueNotice, pushSupport, enablePush, refreshPush, hasServer } from './sync.js';
+import { removeMemberFromServer, startSync, syncNow, syncStatus, onSyncStatus, queueNotice, pushSupport, enablePush, refreshPush, hasServer } from './sync.js';
 
-const VERSION = '0.4.0';
+const VERSION = '0.4.1';
 const COLORS = ['#0d9488', '#3b82f6', '#f97316', '#a855f7', '#e11d48', '#ca8a04'];
 const ALL_COLOR = '#64748b';
 const APP_URL = location.origin + location.pathname;
@@ -538,7 +538,7 @@ function settingsSheet() {
   openSheet(`
     <h2>Ajustes</h2>
     <label>Familia</label>
-    <div class="members">${members().map(m => `<span class="mem"><span class="avatar" style="background:${m.color}">${esc(m.name[0].toUpperCase())}</span>${esc(m.name)}${m.id === S.me ? ' (tú)' : ''}</span>`).join('')}</div>
+    <div class="memlist">${members().map(m => `<div class="memrow"><span class="avatar" style="background:${m.color}">${esc(m.name[0].toUpperCase())}</span><span class="sname">${esc(m.name)}${m.id === S.me ? ' (tú)' : ''}</span>${m.id === S.me ? '' : `<button class="link danger-t" data-act="askDelMember" data-id="${m.id}">Quitar</button>`}</div>`).join('')}</div>
     <button class="btn" data-act="invite">📷 Invitar a alguien (mostrar código)</button>
     <label>Tu nombre y color</label>
     <form data-act="saveMe" class="row">
@@ -562,6 +562,7 @@ function settingsSheet() {
       <button class="btn ghost" data-act="backup">⬇️ Guardar copia</button>
       <label class="btn ghost filebtn">⬆️ Cargar copia<input type="file" accept="application/json,.json" data-act="restore" hidden></label>
     </div>
+    <button class="link danger-t leave" data-act="askLeave">Salir de la familia en este móvil</button>
     <p class="ver">Versión ${VERSION}</p>`, el => {
     el.querySelector('input[type=file]').addEventListener('change', restoreBackup);
   });
@@ -774,6 +775,34 @@ async function onClick(e) {
     case 'delPantry': { const it = S.items.find(i => i.id === b.dataset.id); closeSheet(); await save({ ...it, deleted: true }); toast('Quitado'); break; }
     case 'addPantrySheet': closeSheet(); S.tab = 'despensa'; render(); setTimeout(() => document.getElementById('pantryInput')?.focus(), 50); break;
     case 'invite': inviteSheet(); break;
+    case 'askDelMember': {
+      const m = member(b.dataset.id);
+      openSheet(`<h2>¿Quitar a ${esc(m.name)}?</h2>
+        <p class="hint">Desaparecerá de la familia en todos los móviles y dejará de recibir avisos. Lo que añadió (eventos, compra…) se queda.</p>
+        <button class="btn big danger-bg" data-act="delMember" data-id="${m.id}">Sí, quitar a ${esc(m.name)}</button>
+        <button class="btn ghost" data-act="settings">Cancelar</button>`);
+      break;
+    }
+    case 'delMember': {
+      const m = member(b.dataset.id);
+      await save({ ...m, deleted: true });
+      removeMemberFromServer(m.id);
+      toast(`${m.name} quitado`); settingsSheet(); break;
+    }
+    case 'askLeave':
+      openSheet(`<h2>¿Salir de la familia?</h2>
+        <p class="hint">Se borran los datos de <b>este móvil</b> y vuelves a la pantalla de inicio para crear o unirte a una familia. Los demás móviles no pierden nada.</p>
+        <button class="btn big danger-bg" data-act="leave">Sí, salir en este móvil</button>
+        <button class="btn ghost" data-act="settings">Cancelar</button>`);
+      break;
+    case 'leave': {
+      removeMemberFromServer(S.me);
+      const m = member(S.me);
+      if (m && members().length > 1) { await save({ ...m, deleted: true }); try { await syncNow(); } catch {} }
+      await clearAll();
+      location.replace(APP_URL);
+      break;
+    }
     case 'copyInvite': try { await navigator.clipboard.writeText(b.dataset.url); toast('Enlace copiado'); } catch { toast('No se pudo copiar'); } break;
     case 'myColor': { const me = member(S.me); await save({ ...me, color: b.dataset.c }); settingsSheet(); break; }
     case 'backup': backup(); break;
