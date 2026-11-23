@@ -1,13 +1,13 @@
 :root {
-  --bg: #fff8f4;
+  --bg: #f3faf9;
   --card: #ffffff;
   --ink: #1f2430;
   --muted: #6b7280;
-  --line: #f0e6e0;
-  --accent: #ff7a59;
+  --line: #dcebe8;
+  --accent: #0d9488;
   --accent-ink: #ffffff;
   --danger: #e11d48;
-  --shadow: 0 2px 10px rgba(60, 30, 10, .07);
+  --shadow: 0 2px 10px rgba(10, 50, 45, .07);
   --r: 18px;
   --safe-b: env(safe-area-inset-bottom, 0px);
   --safe-t: env(safe-area-inset-top, 0px);
@@ -72,7 +72,7 @@ main { padding: 4px 16px 0; max-width: 640px; margin: 0 auto; }
   position: fixed; right: 20px; bottom: calc(var(--safe-b) + 84px); z-index: 7;
   width: 68px; height: 68px; border-radius: 50%;
   background: var(--accent); color: #fff; font-size: 40px; line-height: 1; font-weight: 300;
-  box-shadow: 0 8px 24px rgba(255, 122, 89, .45);
+  box-shadow: 0 8px 24px rgba(13, 148, 136, .4);
   display: grid; place-items: center;
 }
 .fab:active { transform: scale(.94); }

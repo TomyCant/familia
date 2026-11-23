@@ -4,7 +4,7 @@ import { ymd, fromYmd, addDays, todayStr, niceDate, occursOn, DIAS_LARGO, DIAS_C
 import { startSync, pushDirty, syncStatus, onSyncStatus } from './sync.js';
 
 const VERSION = '0.2.0';
-const COLORS = ['#ff7a59', '#3b82f6', '#10b981', '#a855f7', '#f59e0b', '#ec4899'];
+const COLORS = ['#0d9488', '#3b82f6', '#f97316', '#a855f7', '#e11d48', '#ca8a04'];
 const ALL_COLOR = '#64748b';
 const APP_URL = location.origin + location.pathname;
 
