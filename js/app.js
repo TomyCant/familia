@@ -3,7 +3,7 @@ import { parseEvent, parseShopping, norm } from './parse.js';
 import { ymd, fromYmd, addDays, todayStr, niceDate, occursOn, DIAS_LARGO, DIAS_CORTO, MESES, REPEAT_LABEL, LETRAS, setHolidays, holidayOn } from './dates.js';
 import { removeMemberFromServer, apiBase, startSync, syncNow, syncStatus, onSyncStatus, queueNotice, pushSupport, enablePush, refreshPush, hasServer } from './sync.js';
 
-const VERSION = '0.5.0';
+const VERSION = '0.5.1';
 const COLORS = ['#0d9488', '#3b82f6', '#f97316', '#a855f7', '#e11d48', '#ca8a04'];
 const ALL_COLOR = '#64748b';
 const APP_URL = location.origin + location.pathname;
@@ -261,21 +261,22 @@ function quickSheet() {
   const others = members().filter(m => m.id !== S.me);
   const to = others.length === 1 ? others[0].id : 'all';
   const toName = to === 'all' ? 'toda la familia' : others[0].name;
-  const url = `${apiBase()}/quick?de=${S.me}&para=${to}`;
+  const url = `${apiBase()}/quick?de=${S.me}&para=${to}&texto=`;
   openSheet(`
     <h2>⚡ Encargo rápido</h2>
-    <p class="hint">Crea un <b>Atajo</b> en este iPhone para mandar un encargo a <b>${esc(toName)}</b> sin abrir la app: con un icono, diciendo <i>“Oye Siri, encargo”</i> o con el botón de Acción. Se hace una vez y tarda 2 minutos.</p>
+    <p class="hint">Un <b>Atajo</b> para mandar un encargo a <b>${esc(toName)}</b> sin abrir la app: con un icono, con <i>“Oye Siri, encargo”</i> o con el botón de Acción. Solo son 2 acciones.</p>
     <ol class="steps">
-      <li>Abre la app <b>Atajos</b> → pestaña <b>Atajos</b> → botón <b>+</b> (arriba a la derecha).</li>
-      <li>Toca <b>Buscar acciones</b>, escribe <b>Solicitar entrada</b> y tócala. Donde pone “Pregunta”, escribe: <i>¿Qué encargo?</i></li>
-      <li>Busca otra acción: <b>Obtener contenido de URL</b>. Toca donde pone “URL” y pega esta dirección:
-        <div class="copybox"><code>${esc(url)}</code><button class="btn" data-act="copyText" data-text="${esc(url)}">Copiar dirección</button></div></li>
-      <li>En esa misma acción toca la flechita <b>›</b> (o “Mostrar más”): <b>Método</b> → <b>POST</b>. <b>Cuerpo de la solicitud</b> → <b>JSON</b>. Toca <b>Añadir campo nuevo</b> → <b>Texto</b>: en la clave escribe <b>texto</b> y en el valor toca <b>Entrada proporcionada</b> (aparece sobre el teclado).</li>
-      <li>Busca la acción <b>Mostrar resultado</b> y añádela (así ves “✅ Encargo enviado”).</li>
-      <li>Arriba, toca el nombre del atajo y llámalo <b>Encargo</b>. Pulsa <b>OK</b>.</li>
+      <li>Abre la app <b>Atajos</b> y pulsa <b>+</b> arriba a la derecha.</li>
+      <li>Abajo, en <b>Buscar</b>, escribe <b>pedir</b> y toca <b>Pedir entrada</b>. Toca la palabra azul <b>Solicitud</b> y escribe <i>¿Qué encargo?</i></li>
+      <li>Busca <b>obtener contenido</b> y toca <b>Obtener contenido de URL</b>.</li>
+      <li>Pulsa este botón:
+        <div class="copybox"><button class="btn" data-act="copyText" data-text="${esc(url)}">📋 Copiar dirección</button></div>
+        Toca la parte azul de esa acción (pone <b>URL</b> o <b>Entrada proporcionada</b>). Si había algo, bórralo. Mantén pulsado y elige <b>Pegar</b>.</li>
+      <li><b>Sin mover el cursor</b> (debe quedar al final, después de <b>texto=</b>), toca <b>Entrada proporcionada</b> en la barra que sale encima del teclado. Debe verse la dirección y al final la burbuja azul <i>Entrada proporcionada</i>.</li>
+      <li>Toca el nombre arriba, ponle <b>Encargo</b> y pulsa ✓. Pruébalo con el botón ▶︎.</li>
     </ol>
-    <p class="hint"><b>Para tenerlo a mano:</b> mantén pulsado el atajo → Compartir → <b>Añadir a pantalla de inicio</b>. En un iPhone 15 Pro también puedes ponerlo en el <b>botón de Acción</b> (Ajustes → Botón de Acción → Atajo → Encargo). O simplemente di <i>“Oye Siri, encargo”</i> y díctalo.</p>
-    <p class="note">Cada móvil debe crear su propio atajo desde su propia app (la dirección es distinta para cada uno).</p>
+    <p class="hint"><b>Para tenerlo a mano:</b> en la lista de Atajos, mantén pulsado <b>Encargo</b> → Compartir → <b>Añadir a pantalla de inicio</b>. En el iPhone 15 Pro también: Ajustes → Botón de Acción → Atajo → Encargo. O di <i>“Oye Siri, encargo”</i> y díctalo.</p>
+    <p class="note">Cada móvil hace su propio atajo desde su app: la dirección es distinta para cada uno.</p>
     <button class="btn big" data-act="settings">Hecho</button>`);
 }
 
