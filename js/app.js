@@ -3,14 +3,14 @@ import { parseEvent, parseShopping, norm } from './parse.js';
 import { ymd, fromYmd, addDays, todayStr, niceDate, occursOn, DIAS_LARGO, DIAS_CORTO, MESES, REPEAT_LABEL } from './dates.js';
 import { startSync, pushDirty, syncStatus, onSyncStatus } from './sync.js';
 
-const VERSION = '0.1.0';
+const VERSION = '0.2.0';
 const COLORS = ['#ff7a59', '#3b82f6', '#10b981', '#a855f7', '#f59e0b', '#ec4899'];
 const ALL_COLOR = '#64748b';
 const APP_URL = location.origin + location.pathname;
 
 const S = {
   family: null, me: null, items: [],
-  tab: 'hoy', calMonth: null, calDay: todayStr(),
+  tab: 'hoy', calMonth: null, calDay: todayStr(), place: 'despensa',
   joinPayload: null,
 };
 
@@ -22,6 +22,8 @@ const members = () => S.items.filter(i => i.kind === 'member' && !i.deleted);
 const member = id => members().find(m => m.id === id);
 const events = () => S.items.filter(i => i.kind === 'event' && !i.deleted);
 const shop = () => S.items.filter(i => i.kind === 'shop' && !i.deleted);
+const pantry = () => S.items.filter(i => i.kind === 'pantry' && !i.deleted);
+const PLACES = [['despensa', '🥫', 'Despensa'], ['nevera', '🧊', 'Nevera'], ['congelador', '❄️', 'Congelador'], ['hogar', '🧴', 'Limpieza y hogar']];
 const colorOf = who => (who && who !== 'all' && member(who)?.color) || ALL_COLOR;
 
 async function reload() { S.items = await allItems(); render(); }
@@ -65,7 +67,7 @@ function render() {
   const active = document.activeElement;
   const keep = active && active.id && app.contains(active) ? { id: active.id, v: active.value, s: active.selectionStart } : null;
 
-  const title = { hoy: 'Hoy', cal: 'Calendario', compra: 'Compra' }[S.tab];
+  const title = { hoy: 'Hoy', cal: 'Calendario', compra: 'Compra', despensa: 'Despensa' }[S.tab];
   const meM = member(S.me);
   app.innerHTML = `
   <header class="top">
@@ -75,10 +77,10 @@ function render() {
       <span class="avatar" style="background:${meM?.color || ALL_COLOR}">${esc((meM?.name || '?')[0].toUpperCase())}</span>
     </button>
   </header>
-  <main id="main">${S.tab === 'hoy' ? viewHoy() : S.tab === 'cal' ? viewCal() : viewCompra()}</main>
+  <main id="main">${S.tab === 'hoy' ? viewHoy() : S.tab === 'cal' ? viewCal() : S.tab === 'despensa' ? viewDespensa() : viewCompra()}</main>
   <button class="fab" data-act="plus" aria-label="Añadir">+</button>
   <nav class="tabs">
-    ${tabBtn('hoy', '🏠', 'Hoy')}${tabBtn('cal', '📅', 'Calendario')}${tabBtn('compra', '🛒', 'Compra', shop().filter(s => !s.done).length)}
+    ${tabBtn('hoy', '🏠', 'Hoy')}${tabBtn('cal', '📅', 'Calendario')}${tabBtn('compra', '🛒', 'Compra', shop().filter(s => !s.done).length)}${tabBtn('despensa', '🥫', 'Despensa', pantry().filter(x => x.qty <= 0).length)}
   </nav>`;
   renderSyncDot();
   if (keep) {
@@ -132,6 +134,7 @@ function viewHoy() {
     <span class="big">🛒</span>
     <span>${pend.length ? `<b>Faltan ${pend.length} ${pend.length === 1 ? 'cosa' : 'cosas'}</b><br><small>${esc(pend.slice(0, 5).map(p => p.name).join(', '))}${pend.length > 5 ? '…' : ''}</small>` : '<b>La lista de la compra está vacía</b>'}</span>
   </button>
+  ${(() => { const out = pantry().filter(x => x.qty <= 0); return out.length ? `<button class="card shopcard" data-act="tab" data-tab="despensa"><span class="big">🥫</span><span><b>Se ha acabado: ${out.length === 1 ? '1 cosa' : out.length + ' cosas'}</b><br><small>${esc(out.slice(0, 5).map(p => p.name).join(', '))}${out.length > 5 ? '…' : ''}</small></span></button>` : ''; })()}
   <section class="card">
     <h2>Mañana</h2>
     ${man.length ? man.map(e => eventRow(e, ymd(addDays(d, 1)))).join('') : `<p class="empty">Nada todavía</p>`}
@@ -194,6 +197,71 @@ function viewCompra() {
   <div class="spacer"></div>`;
 }
 
+function viewDespensa() {
+  const list = pantry().filter(x => (x.place || 'despensa') === S.place)
+    .sort((a, b) => (a.qty > 0) - (b.qty > 0) || a.name.localeCompare(b.name, 'es'));
+  const count = pl => pantry().filter(x => (x.place || 'despensa') === pl).length;
+  return `
+  <div class="chips places">${PLACES.map(([id, ic, n]) => `<button class="chip ${S.place === id ? 'on' : ''}" data-act="place" data-place="${id}">${ic} ${n}${count(id) ? ` <small>${count(id)}</small>` : ''}</button>`).join('')}</div>
+  <form class="addshop" data-act="addPantry">
+    <input id="pantryInput" type="text" placeholder="Añadir: arroz 2, atún 6…" autocomplete="off" enterkeyhint="done">
+    <button class="btn" type="submit">Añadir</button>
+  </form>
+  <section class="card">
+    ${list.length ? list.map(pantryRow).join('') : `<p class="empty">Aún no hay nada aquí<br><small>Escribe el producto y cuántos tenéis: <i>arroz 2, leche 6</i></small></p>`}
+  </section>
+  <p class="hint center">Al marcar algo como comprado en la Compra, se suma solo aquí.</p>
+  <div class="spacer"></div>`;
+}
+
+function pantryRow(p) {
+  const out = p.qty <= 0;
+  const onList = shop().some(s => !s.done && norm(s.name) === norm(p.name));
+  return `<div class="pan ${out ? 'is-out' : ''}">
+    <button class="pname" data-act="editPantry" data-id="${p.id}">${esc(p.name)}${out ? `<small>${onList ? '✓ En la lista de la compra' : 'Se ha acabado'}</small>` : ''}</button>
+    ${out && !onList ? `<button class="tobuy" data-act="pantryToShop" data-id="${p.id}">🛒 Comprar</button>` : ''}
+    <button class="step" data-act="qty" data-id="${p.id}" data-d="-1" aria-label="Quitar uno">−</button>
+    <b class="qty">${p.qty}</b>
+    <button class="step" data-act="qty" data-id="${p.id}" data-d="1" aria-label="Añadir uno">+</button>
+  </div>`;
+}
+
+function pantrySheet(p) {
+  openSheet(`
+    <form data-act="savePantry" data-id="${p.id}">
+      <h2>${esc(p.name)}</h2>
+      <label>Nombre</label>
+      <input name="name" value="${esc(p.name)}" required autocomplete="off">
+      <label>Cantidad</label>
+      <input name="qty" type="number" inputmode="numeric" min="0" value="${p.qty}">
+      <label>Dónde está</label>
+      <select name="place">${PLACES.map(([id, ic, n]) => `<option value="${id}" ${(p.place || 'despensa') === id ? 'selected' : ''}>${ic} ${n}</option>`).join('')}</select>
+      <button class="btn big" type="submit">Guardar</button>
+      <button type="button" class="btn danger ghost" data-act="delPantry" data-id="${p.id}">Quitar de la despensa</button>
+    </form>`);
+}
+
+// "arroz 2", "6 latas de atún", "leche x3" -> {name, qty}
+function parsePantry(text) {
+  return parseShopping(text).map(t => {
+    let m, qty = 1, name = t;
+    if ((m = t.match(/^(\d+)\s*(?:x\s*)?(.+)$/i))) { qty = +m[1]; name = m[2]; }
+    else if ((m = t.match(/^(.+?)\s*(?:x\s*)?(\d+)$/i))) { qty = +m[2]; name = m[1]; }
+    name = name.trim(); name = name[0].toUpperCase() + name.slice(1);
+    return { name, qty };
+  });
+}
+
+async function addPantry(entries) {
+  const out = [];
+  for (const { name, qty } of entries) {
+    const ex = pantry().find(x => norm(x.name) === norm(name));
+    if (ex) out.push({ ...ex, qty: ex.qty + qty });
+    else out.push({ id: uid(), kind: 'pantry', name, qty, place: S.place, createdAt: Date.now() });
+  }
+  if (out.length) await save(out);
+}
+
 function shopRow(p) {
   return `<div class="shop ${p.done ? 'is-done' : ''}">
     <button class="check" data-act="toggleShop" data-id="${p.id}" aria-label="Marcar">${p.done ? '✓' : ''}</button>
@@ -252,6 +320,7 @@ function plusSheet() {
       <button data-act="addEvent"><span>📅</span>Evento</button>
       <button data-act="addRepeat"><span>🔁</span>Repetitivo</button>
       <button data-act="addShopSheet"><span>🛒</span>Compra</button>
+      <button data-act="addPantrySheet"><span>🥫</span>Despensa</button>
     </div>`);
 }
 
@@ -514,10 +583,24 @@ async function onClick(e) {
     case 'pickDay': S.calDay = b.dataset.day; render(); break;
     case 'month': S.calMonth = new Date(S.calMonth.getFullYear(), S.calMonth.getMonth() + +b.dataset.d, 1); render(); break;
     case 'goToday': { const d = new Date(); S.calMonth = new Date(d.getFullYear(), d.getMonth(), 1); S.calDay = todayStr(); render(); break; }
-    case 'toggleShop': { const it = S.items.find(i => i.id === b.dataset.id); await save({ ...it, done: !it.done, doneAt: Date.now() }); break; }
+    case 'toggleShop': {
+      const it = S.items.find(i => i.id === b.dataset.id);
+      const pan = pantry().find(x => norm(x.name) === norm(it.name));
+      const list = [{ ...it, done: !it.done, doneAt: Date.now() }];
+      if (pan) list.push({ ...pan, qty: Math.max(0, pan.qty + (it.done ? -1 : 1)) });
+      await save(list);
+      if (pan && !it.done) toast(`Despensa: ${pan.name} → ${pan.qty + 1}`);
+      break;
+    }
     case 'delShop': { const it = S.items.find(i => i.id === b.dataset.id); await save({ ...it, deleted: true }); break; }
     case 'clearDone': await save(shop().filter(s => s.done).map(s => ({ ...s, deleted: true }))); break;
     case 'fav': await addShop([b.dataset.name]); break;
+    case 'place': S.place = b.dataset.place; render(); break;
+    case 'qty': { const it = S.items.find(i => i.id === b.dataset.id); await save({ ...it, qty: Math.max(0, it.qty + +b.dataset.d) }); break; }
+    case 'pantryToShop': { const it = S.items.find(i => i.id === b.dataset.id); await addShop([it.name]); toast(`${it.name}: a la compra`); break; }
+    case 'editPantry': { const it = S.items.find(i => i.id === b.dataset.id); if (it) pantrySheet(it); break; }
+    case 'delPantry': { const it = S.items.find(i => i.id === b.dataset.id); closeSheet(); await save({ ...it, deleted: true }); toast('Quitado'); break; }
+    case 'addPantrySheet': closeSheet(); S.tab = 'despensa'; render(); setTimeout(() => document.getElementById('pantryInput')?.focus(), 50); break;
     case 'invite': inviteSheet(); break;
     case 'copyInvite': try { await navigator.clipboard.writeText(b.dataset.url); toast('Enlace copiado'); } catch { toast('No se pudo copiar'); } break;
     case 'myColor': { const me = member(S.me); await save({ ...me, color: b.dataset.c }); settingsSheet(); break; }
@@ -568,6 +651,16 @@ async function onSubmit(e) {
       await save(ev);
       toast(`Guardado: ${niceDate(ev.date)}${ev.time ? ' ' + ev.time : ''}`);
       break;
+    }
+    case 'addPantry': {
+      const inp = f.querySelector('input'); const entries = parsePantry(inp.value); inp.value = '';
+      await addPantry(entries); document.getElementById('pantryInput')?.focus(); break;
+    }
+    case 'savePantry': {
+      const it = S.items.find(i => i.id === f.dataset.id);
+      closeSheet();
+      await save({ ...it, name: fd.get('name').trim(), qty: Math.max(0, parseInt(fd.get('qty'), 10) || 0), place: fd.get('place') });
+      toast('Guardado'); break;
     }
     case 'saveMe': { const me = member(S.me); await save({ ...me, name: fd.get('name').trim() }); closeSheet(); toast('Guardado'); break; }
     case 'pasteCode': { const p = decodePayload(fd.get('code') || ''); if (p) gotPayload(p); else toast('Código no válido'); break; }
