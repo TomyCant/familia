@@ -33,3 +33,28 @@ self.addEventListener('fetch', e => {
       .then(hit => hit || fetch(req))
   );
 });
+
+// ---------- avisos
+self.addEventListener('push', e => {
+  let d = {};
+  try { d = e.data ? e.data.json() : {}; } catch { d = { title: 'Familia', body: e.data?.text() || '' }; }
+  e.waitUntil((async () => {
+    await self.registration.showNotification(d.title || 'Familia', {
+      body: d.body || '', icon: 'icons/icon-192.png', badge: 'icons/icon-192.png',
+      tag: d.tag || undefined, data: { tab: d.tab || '' },
+    });
+    // Que la app (si está abierta) se sincronice ya
+    const cs = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
+    cs.forEach(c => c.postMessage('sync'));
+  })());
+});
+
+self.addEventListener('notificationclick', e => {
+  e.notification.close();
+  const tab = e.notification.data?.tab || '';
+  e.waitUntil((async () => {
+    const cs = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
+    if (cs.length) { const c = cs[0]; c.postMessage({ tab }); return c.focus(); }
+    return self.clients.openWindow('./' + (tab ? '?tab=' + tab : ''));
+  })());
+});

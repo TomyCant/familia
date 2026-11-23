@@ -1,73 +1,139 @@
-// Sincronización con la nube (Firebase Firestore). Opcional: si no hay configuración, no hace nada.
+// Sincronización con el servidor de la familia (Cloudflare). Opcional: sin servidor, todo sigue en el móvil.
 // Regla de fusión: cada elemento por separado, gana el cambio más reciente (updatedAt).
 // Como cada cosa de la compra es un elemento distinto, las listas se suman solas.
 import { allItems, putItems, getItem, meta } from './db.js';
 
-const V = '10.12.2';
-let fs = null, db = null, familyId = null, onChange = null, status = 'off', statusCb = null, pushing = false;
+const API = () => (window.API_URL || '').replace(/\/$/, '');
+let familyId = null, onChange = null, status = 'off', statusCb = null, running = null, again = false, timer = 0;
 
 export const syncStatus = () => status;
 export const onSyncStatus = cb => { statusCb = cb; };
-function setStatus(s) { status = s; statusCb && statusCb(s); }
+export const hasServer = () => !!API();
+export const apiBase = () => `${API()}/f/${familyId}`;
+function setStatus(s) { if (s !== status) { status = s; statusCb && statusCb(s); } }
 
-export async function startSync(fid, changed) {
+export function startSync(fid, changed) {
   familyId = fid; onChange = changed;
-  const cfg = window.FIREBASE_CONFIG;
-  if (!cfg) { setStatus('off'); return; }
-  try {
-    setStatus(navigator.onLine ? 'connecting' : 'offline');
-    const appMod = await import(`https://www.gstatic.com/firebasejs/${V}/firebase-app.js`);
-    const authMod = await import(`https://www.gstatic.com/firebasejs/${V}/firebase-auth.js`);
-    fs = await import(`https://www.gstatic.com/firebasejs/${V}/firebase-firestore.js`);
-    const app = appMod.initializeApp(cfg);
-    const auth = authMod.getAuth(app);
-    await authMod.signInAnonymously(auth);
-    db = fs.getFirestore(app);
-    listen();
-    pushDirty();
-    window.addEventListener('online', () => { setStatus('connecting'); pushDirty(); });
-    window.addEventListener('offline', () => setStatus('offline'));
-    document.addEventListener('visibilitychange', () => { if (!document.hidden) pushDirty(); });
-  } catch (e) {
-    console.warn('sync', e);
-    setStatus('offline');
-    // Sin internet al arrancar: reintentamos cuando vuelva
-    window.addEventListener('online', () => { if (!db) startSync(familyId, onChange); }, { once: true });
-  }
+  if (!API()) { setStatus('off'); return; }
+  setStatus(navigator.onLine ? 'connecting' : 'offline');
+  window.addEventListener('online', () => syncNow());
+  window.addEventListener('offline', () => setStatus('offline'));
+  document.addEventListener('visibilitychange', () => { if (!document.hidden) syncNow(); else flushSoon(0); });
+  navigator.serviceWorker?.addEventListener('message', e => { if (e.data === 'sync') syncNow(); });
+  setInterval(() => { if (!document.hidden) syncNow(); }, 30000);
+  syncNow();
 }
 
-async function listen() {
-  const since = ((await meta.get('lastRemote')) || 0) - 10 * 60 * 1000;
-  const col = fs.collection(db, 'families', familyId, 'items');
-  const q = fs.query(col, fs.where('updatedAt', '>', since));
-  fs.onSnapshot(q, async snap => {
-    const incoming = [];
-    let maxT = 0;
-    for (const ch of snap.docChanges()) {
-      if (ch.type === 'removed') continue;
-      const r = ch.doc.data();
-      maxT = Math.max(maxT, r.updatedAt || 0);
-      const local = await getItem(r.id);
-      if (!local || (r.updatedAt || 0) > (local.updatedAt || 0)) incoming.push({ ...r, dirty: false });
-    }
-    if (incoming.length) { await putItems(incoming); onChange && onChange(); }
-    if (maxT) await meta.set('lastRemote', Math.max(maxT, (await meta.get('lastRemote')) || 0));
-    if (!snap.metadata.fromCache) setStatus('ok');
-  }, err => { console.warn(err); setStatus('offline'); });
+// Pide una sincronización (se agrupan las peticiones seguidas)
+export function syncNow() {
+  if (!API() || !familyId) return Promise.resolve();
+  if (running) { again = true; return running; }
+  running = doSync().finally(() => { running = null; if (again) { again = false; syncNow(); } });
+  return running;
 }
 
-export async function pushDirty() {
-  if (!db || pushing) return;
-  pushing = true;
+async function doSync() {
   try {
+    // 1) Subir lo cambiado en este móvil
     const dirty = (await allItems()).filter(i => i.dirty);
+    for (let i = 0; i < dirty.length; i += 200) {
+      const chunk = dirty.slice(i, i + 200).map(({ dirty: _d, ...c }) => c);
+      const r = await fetch(`${apiBase()}/items`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ items: chunk }) });
+      if (!r.ok) throw new Error('push ' + r.status);
+    }
     for (const it of dirty) {
-      const { dirty: _d, ...clean } = it;
-      await fs.setDoc(fs.doc(db, 'families', familyId, 'items', it.id), clean);
       const now = await getItem(it.id);
       if (now && now.updatedAt === it.updatedAt) await putItems([{ ...now, dirty: false }]);
     }
-    if (navigator.onLine) setStatus('ok');
-  } catch (e) { console.warn('push', e); setStatus('offline'); }
-  finally { pushing = false; }
+    // 2) Bajar lo cambiado en otros móviles
+    let changed = false, more = true;
+    while (more) {
+      const since = (await meta.get('cursor')) || 0;
+      const r = await fetch(`${apiBase()}/items?since=${since}`);
+      if (!r.ok) throw new Error('pull ' + r.status);
+      const data = await r.json();
+      const incoming = [];
+      for (const it of data.items) {
+        const local = await getItem(it.id);
+        if (!local || (it.updatedAt || 0) > (local.updatedAt || 0)) incoming.push({ ...it, dirty: false });
+      }
+      if (incoming.length) { await putItems(incoming); changed = true; }
+      await meta.set('cursor', data.cursor || since);
+      more = data.more;
+    }
+    // 3) Enviar los avisos pendientes (después de subir los datos)
+    await flushOutbox();
+    setStatus('ok');
+    if (changed && onChange) onChange();
+  } catch (e) {
+    console.warn('sync', e);
+    setStatus('offline');
+  }
 }
+
+// ---------------------------------------------------------------- avisos
+// Se guardan en una bandeja de salida y se envían cuando hay internet.
+// Lo de la compra se agrupa: un solo aviso con todo lo añadido seguido.
+export async function queueNotice(n) {
+  const box = (await meta.get('outbox')) || [];
+  if (n.group) {
+    const g = box.find(x => x.group === n.group && !x.sent);
+    if (g) { g.items = [...new Set([...g.items, ...n.items])]; g.at = Date.now(); await meta.set('outbox', box); flushSoon(); return; }
+  }
+  box.push({ ...n, id: Math.random().toString(36).slice(2), at: Date.now() });
+  await meta.set('outbox', box);
+  flushSoon();
+}
+
+function flushSoon(ms = 12000) {
+  clearTimeout(timer);
+  timer = setTimeout(() => syncNow(), ms);
+}
+
+async function flushOutbox() {
+  const box = (await meta.get('outbox')) || [];
+  if (!box.length) return;
+  const sent = new Set(), keep = [];
+  for (const n of box) {
+    // Los de la compra esperan unos segundos por si se añade algo más
+    if (n.group && Date.now() - n.at < 10000 && !document.hidden) { keep.push(n); continue; }
+    const body = n.group ? `${n.who} ha añadido: ${n.items.join(', ')}` : n.body;
+    try {
+      const r = await fetch(`${apiBase()}/notify`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ from: n.from, title: n.title, body, tab: n.tab, tag: n.group || '' }) });
+      if (r.ok) sent.add(n.id);
+    } catch {}
+  }
+  if (sent.size) await meta.set('outbox', ((await meta.get('outbox')) || []).filter(n => !sent.has(n.id)));
+  if (keep.length) flushSoon();
+}
+
+// ---------------------------------------------------------------- suscripción a avisos
+export function pushSupport() {
+  if (!API()) return 'noserver';
+  const standalone = window.matchMedia('(display-mode: standalone)').matches || navigator.standalone;
+  if (!('PushManager' in window) || !('Notification' in window)) return standalone ? 'unsupported' : 'install';
+  if (Notification.permission === 'denied') return 'denied';
+  return Notification.permission === 'granted' ? 'granted' : 'default';
+}
+
+export async function enablePush(memberId) {
+  const perm = await Notification.requestPermission();
+  if (perm !== 'granted') return false;
+  const reg = await navigator.serviceWorker.ready;
+  const { key } = await (await fetch(`${apiBase()}/vapid`)).json();
+  let sub = await reg.pushManager.getSubscription();
+  if (sub && b64u(sub.options?.applicationServerKey) !== key) { await sub.unsubscribe(); sub = null; }
+  if (!sub) sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: unb64u(key) });
+  const r = await fetch(`${apiBase()}/subscribe`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ member: memberId, sub: sub.toJSON() }) });
+  if (r.ok) await meta.set('pushOn', true);
+  return r.ok;
+}
+
+// Re-registra la suscripción al abrir la app (por si el móvil la renovó)
+export async function refreshPush(memberId) {
+  if (pushSupport() !== 'granted' || !(await meta.get('pushOn'))) return;
+  try { await enablePush(memberId); } catch {}
+}
+
+const b64u = buf => buf ? btoa(String.fromCharCode(...new Uint8Array(buf))).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '') : '';
+const unb64u = s => Uint8Array.from(atob(s.replace(/-/g, '+').replace(/_/g, '/') + '==='.slice((s.length + 3) % 4)), c => c.charCodeAt(0));

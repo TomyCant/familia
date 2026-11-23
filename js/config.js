@@ -1,2 +1,3 @@
-// Configuración de la nube (Firebase). Mientras sea null, la app funciona solo en el móvil.
-window.FIREBASE_CONFIG = null;
+// Dirección del servidor de la familia (Cloudflare). La rellena la publicación automática.
+// Mientras esté vacía, la app funciona solo en el móvil.
+window.API_URL = '';

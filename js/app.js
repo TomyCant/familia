@@ -1,9 +1,9 @@
 import { meta, allItems, putItems, uid, clearAll } from './db.js';
 import { parseEvent, parseShopping, norm } from './parse.js';
 import { ymd, fromYmd, addDays, todayStr, niceDate, occursOn, DIAS_LARGO, DIAS_CORTO, MESES, REPEAT_LABEL } from './dates.js';
-import { startSync, pushDirty, syncStatus, onSyncStatus } from './sync.js';
+import { startSync, syncNow, syncStatus, onSyncStatus, queueNotice, pushSupport, enablePush, refreshPush, hasServer } from './sync.js';
 
-const VERSION = '0.2.0';
+const VERSION = '0.3.0';
 const COLORS = ['#0d9488', '#3b82f6', '#f97316', '#a855f7', '#e11d48', '#ca8a04'];
 const ALL_COLOR = '#64748b';
 const APP_URL = location.origin + location.pathname;
@@ -37,7 +37,7 @@ async function save(list) {
     if (k >= 0) S.items[k] = it; else S.items.push(it);
   }
   render();
-  pushDirty();
+  syncNow();
 }
 
 function eventsOn(day) {
@@ -50,14 +50,17 @@ async function init() {
   if (navigator.storage?.persist) navigator.storage.persist().catch(() => {});
   const h = location.hash;
   if (h.startsWith('#unir=')) S.joinPayload = decodePayload(h.slice(6));
+  const qt = new URLSearchParams(location.search).get('tab');
+  if (['hoy', 'cal', 'compra', 'despensa'].includes(qt)) { S.tab = qt; history.replaceState(null, '', APP_URL + location.hash); }
   S.family = await meta.get('family');
   S.me = await meta.get('me');
   S.items = await allItems();
   const d = new Date(); S.calMonth = new Date(d.getFullYear(), d.getMonth(), 1);
   if (S.family && S.joinPayload) { history.replaceState(null, '', APP_URL); S.joinPayload = null; }
   render();
-  if (S.family) startSync(S.family.id, reload);
+  if (S.family) { startSync(S.family.id, reload); refreshPush(S.me); }
   onSyncStatus(() => renderSyncDot());
+  navigator.serviceWorker?.addEventListener('message', e => { if (e.data?.tab && S.family) { S.tab = e.data.tab; closeSheet(); render(); } });
   registerSW();
 }
 
@@ -126,6 +129,7 @@ function viewHoy() {
   const pend = shop().filter(s => !s.done);
   return `
   <p class="hello">${hola}, ${esc(member(S.me)?.name || '')} 👋<br><span>${DIAS_LARGO[d.getDay()]} ${d.getDate()} de ${MESES[d.getMonth()]}</span></p>
+  ${pushCard()}
   <section class="card">
     <h2>Hoy</h2>
     ${hoy.length ? hoy.map(e => eventRow(e, t)).join('') : `<p class="empty">Nada para hoy 🎉</p>`}
@@ -141,6 +145,14 @@ function viewHoy() {
   </section>
   ${prox ? `<section class="card"><h2>Próximos días</h2>${prox}</section>` : ''}
   <div class="spacer"></div>`;
+}
+
+function pushCard() {
+  if (!hasServer() || members().length < 2) return '';
+  const st = pushSupport();
+  if (st === 'default') return `<button class="card shopcard notice" data-act="enablePush"><span class="big">🔔</span><span><b>Activa los avisos</b><br><small>Para enterarte cuando ${esc(members().filter(m => m.id !== S.me).map(m => m.name).join(' y '))} añada un evento o algo a la compra.</small></span></button>`;
+  if (st === 'install') return `<div class="card shopcard notice"><span class="big">📲</span><span><b>Instala la app para recibir avisos</b><br><small>En Safari: botón Compartir → “Añadir a pantalla de inicio”, y ábrela desde el icono.</small></span></div>`;
+  return '';
 }
 
 function viewCal() {
@@ -390,7 +402,7 @@ function settingsSheet() {
   const me = member(S.me);
   const st = syncStatus();
   const nube = {
-    off: '⚪ Aún sin nube: los datos están guardados solo en este móvil.',
+    off: '⚪ Aún sin servidor: los datos están guardados solo en este móvil.',
     ok: '🟢 Sincronizado con la nube.',
     offline: '🟠 Sin conexión. Todo se guarda en el móvil y se enviará al volver internet.',
     connecting: '🟡 Conectando…',
@@ -408,6 +420,15 @@ function settingsSheet() {
     <div class="colors">${COLORS.map(c => `<button class="color ${me?.color === c ? 'on' : ''}" data-act="myColor" data-c="${c}" style="background:${c}"></button>`).join('')}</div>
     <label>Nube</label>
     <p class="note">${nube}</p>
+    <label>Avisos</label>
+    ${(() => { const p = pushSupport(); return {
+      noserver: '<p class="note">Los avisos estarán disponibles cuando se active el servidor.</p>',
+      install: '<p class="note">📲 Para recibir avisos, instala la app: en Safari, Compartir → “Añadir a pantalla de inicio”.</p>',
+      unsupported: '<p class="note">Este móvil no admite avisos (hace falta iOS 16.4 o superior).</p>',
+      denied: '<p class="note">🔕 Los avisos están bloqueados. Actívalos en Ajustes del iPhone → Notificaciones → Familia.</p>',
+      granted: '<p class="note">🔔 Avisos activados en este móvil.</p><button class="btn ghost" data-act="testPush">Probar aviso</button>',
+      default: '<button class="btn" data-act="enablePush">🔔 Activar avisos</button>',
+    }[p]; })()}
     <label>Copia de seguridad</label>
     <div class="grid2">
       <button class="btn ghost" data-act="backup">⬇️ Guardar copia</button>
@@ -558,7 +579,7 @@ async function restoreBackup(ev) {
     if (data.family?.id !== S.family.id) { toast('Esa copia es de otra familia'); return; }
     const byId = new Map(S.items.map(i => [i.id, i]));
     const newer = data.items.filter(i => !byId.has(i.id) || (i.updatedAt || 0) > (byId.get(i.id).updatedAt || 0)).map(i => ({ ...i, dirty: true }));
-    await putItems(newer); await reload(); pushDirty();
+    await putItems(newer); await reload(); syncNow();
     closeSheet(); toast(`Copia cargada (${newer.length} cambios)`);
   } catch { toast('Ese archivo no es una copia válida'); }
 }
@@ -605,6 +626,17 @@ async function onClick(e) {
     case 'copyInvite': try { await navigator.clipboard.writeText(b.dataset.url); toast('Enlace copiado'); } catch { toast('No se pudo copiar'); } break;
     case 'myColor': { const me = member(S.me); await save({ ...me, color: b.dataset.c }); settingsSheet(); break; }
     case 'backup': backup(); break;
+    case 'enablePush': {
+      try { const ok = await enablePush(S.me); toast(ok ? '🔔 Avisos activados' : 'No se activaron los avisos'); }
+      catch (err) { console.warn(err); toast('No se pudieron activar los avisos'); }
+      if (sheetEl) settingsSheet(); else render();
+      break;
+    }
+    case 'testPush': {
+      const reg = await navigator.serviceWorker.ready;
+      reg.showNotification('🔔 Así se verán los avisos', { body: 'Ejemplo: Ana ha añadido: leche, pan', icon: 'icons/icon-192.png' });
+      break;
+    }
     case 'wColor': welcomeColor = b.dataset.c; document.querySelectorAll('.welcome .color').forEach(c => c.classList.toggle('on', c.dataset.c === welcomeColor)); break;
     case 'joinScan': scanSheet(); break;
   }
@@ -622,7 +654,10 @@ async function addShop(names) {
     const old = shop().find(s => s.done && norm(s.name) === k);
     add.push(old ? { ...old, done: false, createdAt: t + add.length } : { id: uid(), kind: 'shop', name: n, done: false, createdAt: t + add.length });
   }
-  if (add.length) { await bumpFreq(names); await save(add); }
+  if (add.length) {
+    await bumpFreq(names); await save(add);
+    queueNotice({ group: 'compra', from: S.me, who: member(S.me)?.name || '', title: '🛒 Lista de la compra', items: add.map(a => a.name), tab: 'compra' });
+  }
   else toast('Ya está en la lista');
 }
 
@@ -649,6 +684,7 @@ async function onSubmit(e) {
       const ev = { ...base, title, date: fd.get('date'), time: fd.get('time') || '', who: fd.get('who') || 'all', repeat: fd.get('repeat') || 'none' };
       closeSheet();
       await save(ev);
+      if (!id) queueNotice({ from: S.me, title: '📅 Nuevo evento', body: `${member(S.me)?.name || ''}: ${ev.title} · ${niceDate(ev.date)}${ev.time ? ', ' + ev.time : ''}${ev.repeat !== 'none' ? ' (' + REPEAT_LABEL[ev.repeat].toLowerCase() + ')' : ''}`, tab: 'cal' });
       toast(`Guardado: ${niceDate(ev.date)}${ev.time ? ' ' + ev.time : ''}`);
       break;
     }

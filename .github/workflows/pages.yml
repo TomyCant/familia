@@ -11,21 +11,44 @@ concurrency:
   group: pages
   cancel-in-progress: true
 jobs:
-  deploy:
+  servidor:
+    runs-on: ubuntu-latest
+    outputs:
+      url: ${{ steps.deploy.outputs.url }}
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Publicar servidor en Cloudflare
+        id: deploy
+        if: env.CLOUDFLARE_API_TOKEN != ''
+        working-directory: worker
+        run: |
+          npx --yes wrangler@4 deploy 2>&1 | tee out.txt
+          URL=$(grep -oE 'https://[a-zA-Z0-9.-]+\.workers\.dev' out.txt | head -1)
+          echo "Servidor: $URL"
+          echo "url=$URL" >> "$GITHUB_OUTPUT"
+
+  web:
+    needs: servidor
+    if: always()
     runs-on: ubuntu-latest
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
       - uses: actions/checkout@v4
-      - name: Marcar versión
+      - name: Preparar web
         run: |
           mkdir -p _site
-          rsync -a --exclude '.git' --exclude '.github' --exclude '_site' --exclude 'README.md' ./ _site/
+          rsync -a --exclude '.git' --exclude '.github' --exclude '_site' --exclude 'worker' --exclude 'README.md' ./ _site/
           sed -i "s/__BUILD__/${GITHUB_SHA::8}/" _site/sw.js
+          if [ -n "${{ needs.servidor.outputs.url }}" ]; then
+            sed -i "s#window.API_URL = '';#window.API_URL = '${{ needs.servidor.outputs.url }}';#" _site/js/config.js
+          fi
+          cat _site/js/config.js
       - uses: actions/configure-pages@v5
-        with:
-          enablement: true
       - uses: actions/upload-pages-artifact@v3
       - id: deployment
         uses: actions/deploy-pages@v4
