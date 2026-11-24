@@ -6,6 +6,7 @@ const FILES = [
   './', 'index.html', 'styles.css', 'manifest.webmanifest',
   'js/app.js', 'js/db.js', 'js/parse.js', 'js/dates.js', 'js/sync.js', 'js/config.js',
   'vendor/qrcode.js', 'vendor/jsQR.js',
+  'encargo/', 'icons/encargo-180.png',
   'icons/icon-192.png', 'icons/icon-512.png', 'icons/apple-touch-icon.png',
 ];
 

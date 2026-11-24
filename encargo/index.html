@@ -1,0 +1,95 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="robots" content="noindex, nofollow">
+<meta name="theme-color" content="#f97316">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Encargo">
+<link rel="apple-touch-icon" href="../icons/encargo-180.png">
+<title>Encargo</title>
+<style>
+  :root { --bg:#fff7ef; --card:#fff; --ink:#1f2430; --muted:#6b7280; --acc:#ea580c; --line:#f3e3d3; }
+  @media (prefers-color-scheme: dark) { :root { --bg:#17130f; --card:#25201b; --ink:#f3f4f6; --muted:#a8a29e; --line:#3a322a; } }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body { margin: 0; background: var(--bg); color: var(--ink); font: 18px/1.35 -apple-system, system-ui, sans-serif; }
+  .wrap { max-width: 520px; margin: 0 auto; padding: calc(env(safe-area-inset-top) + 18px) 18px calc(env(safe-area-inset-bottom) + 24px); }
+  h1 { font-size: 26px; margin: 0 0 4px; }
+  .sub { color: var(--muted); margin: 0 0 16px; font-size: 16px; }
+  .presets { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  .presets button, .send { font: inherit; border: 0; border-radius: 18px; cursor: pointer; }
+  .presets button { background: var(--card); color: var(--ink); padding: 16px 10px; font-weight: 600; font-size: 17px; box-shadow: 0 2px 10px rgba(0,0,0,.07); min-height: 78px; }
+  .presets button:active, .send:active { transform: scale(.97); }
+  label { display: block; margin: 20px 2px 8px; font-size: 14px; font-weight: 700; color: var(--muted); text-transform: uppercase; letter-spacing: .03em; }
+  textarea { width: 100%; font: inherit; font-size: 19px; color: var(--ink); background: var(--card); border: 2px solid var(--line); border-radius: 16px; padding: 14px; min-height: 92px; resize: none; outline: none; }
+  textarea:focus { border-color: var(--acc); }
+  .send { display: block; width: 100%; margin-top: 12px; background: var(--acc); color: #fff; font-weight: 800; font-size: 20px; padding: 18px; }
+  .send[disabled] { opacity: .6; }
+  .msg { text-align: center; font-weight: 700; margin: 16px 0 0; min-height: 26px; }
+  .ok { color: #16a34a; } .err { color: #dc2626; }
+  .hint { color: var(--muted); font-size: 14px; text-align: center; margin-top: 18px; }
+  .setup { background: var(--card); border-radius: 18px; padding: 16px; margin-top: 18px; }
+  .setup ol { padding-left: 22px; margin: 6px 0 0; } .setup li { margin-bottom: 8px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>📣 Encargo</h1>
+  <p class="sub" id="sub"></p>
+  <div class="presets" id="presets"></div>
+  <label for="t">O escríbelo (o díctalo con el 🎤 del teclado)</label>
+  <textarea id="t" placeholder="Ej: Recoge a Lola a las 4:15"></textarea>
+  <button class="send" id="send">Enviar ya</button>
+  <p class="msg" id="msg"></p>
+  <div class="setup" id="setup" hidden>
+    <b>Pon este icono en tu pantalla de inicio:</b>
+    <ol><li>Toca el botón <b>Compartir</b> de Safari (cuadrado con flecha).</li><li>Elige <b>Añadir a pantalla de inicio</b> y pulsa <b>Añadir</b>.</li></ol>
+  </div>
+</div>
+<script src="../js/config.js"></script>
+<script>
+  const q = new URLSearchParams(location.search);
+  let cfg = { f: q.get('f'), de: q.get('de'), para: q.get('para') || 'all', n: q.get('n') || '' };
+  try { if (cfg.f) localStorage.setItem('encargo', JSON.stringify(cfg)); else cfg = JSON.parse(localStorage.getItem('encargo')) || cfg; } catch {}
+  const $ = id => document.getElementById(id);
+  const api = (window.API_URL || '').replace(/\/$/, '');
+  if (!cfg.f || !cfg.de) {
+    $('sub').textContent = 'Este enlace no está bien. Genéralo otra vez desde la app Familia → Ajustes.';
+    $('send').disabled = true;
+  } else {
+    $('sub').textContent = `Le llega al momento a ${cfg.n || 'la familia'}.`;
+  }
+  const standalone = navigator.standalone || matchMedia('(display-mode: standalone)').matches;
+  if (!standalone && cfg.f) $('setup').hidden = false;
+
+  const PRESETS = ['🚪 Baja al portal en 2 minutos', '🧒 Recoge a los niños', '📞 Llámame cuando puedas', '🏃 Llego en 5 minutos', '🛒 Mira la lista de la compra', '🔑 Ábreme la puerta'];
+  let recent = []; try { recent = JSON.parse(localStorage.getItem('recientes')) || []; } catch {}
+  const all = [...recent.filter(r => !PRESETS.includes(r)), ...PRESETS].slice(0, 8);
+  $('presets').innerHTML = all.map(p => `<button data-t="${p.replace(/"/g, '&quot;')}">${p.replace(/</g, '&lt;')}</button>`).join('');
+  $('presets').addEventListener('click', e => { const b = e.target.closest('button'); if (b) send(b.dataset.t); });
+  $('send').addEventListener('click', () => send($('t').value));
+
+  let busy = false;
+  async function send(text) {
+    text = (text || '').trim();
+    if (!text || busy || !cfg.f) { if (!text) $('t').focus(); return; }
+    busy = true; $('send').disabled = true;
+    $('msg').className = 'msg'; $('msg').textContent = 'Enviando…';
+    try {
+      const url = `${api}/f/${cfg.f}/quick?de=${encodeURIComponent(cfg.de)}&para=${encodeURIComponent(cfg.para)}&texto=${encodeURIComponent(text)}`;
+      const r = await fetch(url);
+      const body = await r.text();
+      if (!r.ok) throw new Error(body);
+      $('msg').className = 'msg ok'; $('msg').textContent = body;
+      $('t').value = '';
+      if (!PRESETS.includes(text)) { recent = [text, ...recent.filter(x => x !== text)].slice(0, 2); try { localStorage.setItem('recientes', JSON.stringify(recent)); } catch {} }
+    } catch (e) {
+      $('msg').className = 'msg err';
+      $('msg').textContent = navigator.onLine ? 'No se pudo enviar: ' + (e.message || 'error') : 'Sin internet. Prueba otra vez cuando tengas conexión.';
+    } finally { busy = false; $('send').disabled = false; }
+  }
+</script>
+</body>
+</html>

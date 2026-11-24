@@ -3,7 +3,7 @@ import { parseEvent, parseShopping, norm } from './parse.js';
 import { ymd, fromYmd, addDays, todayStr, niceDate, occursOn, DIAS_LARGO, DIAS_CORTO, MESES, REPEAT_LABEL, LETRAS, setHolidays, holidayOn } from './dates.js';
 import { removeMemberFromServer, apiBase, startSync, syncNow, syncStatus, onSyncStatus, queueNotice, pushSupport, enablePush, refreshPush, hasServer } from './sync.js';
 
-const VERSION = '0.5.1';
+const VERSION = '0.6.0';
 const COLORS = ['#0d9488', '#3b82f6', '#f97316', '#a855f7', '#e11d48', '#ca8a04'];
 const ALL_COLOR = '#64748b';
 const APP_URL = location.origin + location.pathname;
@@ -260,23 +260,17 @@ function quickSheet() {
   if (!hasServer()) { toast('Hace falta el servidor activo'); return; }
   const others = members().filter(m => m.id !== S.me);
   const to = others.length === 1 ? others[0].id : 'all';
-  const toName = to === 'all' ? 'toda la familia' : others[0].name;
-  const url = `${apiBase()}/quick?de=${S.me}&para=${to}&texto=`;
+  const toName = to === 'all' ? 'la familia' : others[0].name;
+  const link = new URL(`encargo/?f=${S.family.id}&de=${S.me}&para=${to}&n=${encodeURIComponent(toName)}`, APP_URL).href;
   openSheet(`
-    <h2>⚡ Encargo rápido</h2>
-    <p class="hint">Un <b>Atajo</b> para mandar un encargo a <b>${esc(toName)}</b> sin abrir la app: con un icono, con <i>“Oye Siri, encargo”</i> o con el botón de Acción. Solo son 2 acciones.</p>
+    <h2>⚡ Icono de Encargo rápido</h2>
+    <p class="hint">Un icono naranja 📣 en tu pantalla de inicio: lo tocas, eliges “Baja al portal”, “Recoge a los niños”… o lo escribes, y a <b>${esc(toName)}</b> le llega al momento.</p>
     <ol class="steps">
-      <li>Abre la app <b>Atajos</b> y pulsa <b>+</b> arriba a la derecha.</li>
-      <li>Abajo, en <b>Buscar</b>, escribe <b>pedir</b> y toca <b>Pedir entrada</b>. Toca la palabra azul <b>Solicitud</b> y escribe <i>¿Qué encargo?</i></li>
-      <li>Busca <b>obtener contenido</b> y toca <b>Obtener contenido de URL</b>.</li>
-      <li>Pulsa este botón:
-        <div class="copybox"><button class="btn" data-act="copyText" data-text="${esc(url)}">📋 Copiar dirección</button></div>
-        Toca la parte azul de esa acción (pone <b>URL</b> o <b>Entrada proporcionada</b>). Si había algo, bórralo. Mantén pulsado y elige <b>Pegar</b>.</li>
-      <li><b>Sin mover el cursor</b> (debe quedar al final, después de <b>texto=</b>), toca <b>Entrada proporcionada</b> en la barra que sale encima del teclado. Debe verse la dirección y al final la burbuja azul <i>Entrada proporcionada</i>.</li>
-      <li>Toca el nombre arriba, ponle <b>Encargo</b> y pulsa ✓. Pruébalo con el botón ▶︎.</li>
+      <li>Pulsa: <div class="copybox"><button class="btn" data-act="copyText" data-text="${esc(link)}">📋 Copiar enlace</button></div></li>
+      <li>Abre <b>Safari</b>, toca la barra de direcciones, mantén pulsado → <b>Pegar y acceder</b>.</li>
+      <li>Toca <b>Compartir</b> (cuadrado con flecha) → <b>Añadir a pantalla de inicio</b> → <b>Añadir</b>.</li>
     </ol>
-    <p class="hint"><b>Para tenerlo a mano:</b> en la lista de Atajos, mantén pulsado <b>Encargo</b> → Compartir → <b>Añadir a pantalla de inicio</b>. En el iPhone 15 Pro también: Ajustes → Botón de Acción → Atajo → Encargo. O di <i>“Oye Siri, encargo”</i> y díctalo.</p>
-    <p class="note">Cada móvil hace su propio atajo desde su app: la dirección es distinta para cada uno.</p>
+    <p class="note">Cada uno lo hace desde su propio móvil (el enlace es distinto para cada uno).</p>
     <button class="btn big" data-act="settings">Hecho</button>`);
 }
 
@@ -582,7 +576,7 @@ function settingsSheet() {
       default: '<button class="btn" data-act="enablePush">🔔 Activar avisos</button>',
     }[p]; })()}
     <label>Encargo rápido</label>
-    <button class="btn ghost" data-act="quickSetup">⚡ Enviar encargos sin abrir la app</button>
+    <button class="btn ghost" data-act="quickSetup">⚡ Icono de Encargo rápido</button>
     <label>Copia de seguridad</label>
     <div class="grid2">
       <button class="btn ghost" data-act="backup">⬇️ Guardar copia</button>
